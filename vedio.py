@@ -11,23 +11,34 @@ import shutil
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
-from dotenv import load_dotenv
 from prompts import DEFAULT_PROMPT
+
+try:
+    from dotenv import load_dotenv
+except Exception:
+    def load_dotenv(*args, **kwargs):
+        return False
 
 # Prefer the new Gemini SDK. Fall back to the deprecated one if needed.
 _USING_NEW_GENAI = False
+_GENAI_IMPORT_ERROR = None
+types = None
+genai = None
 try:
     from google import genai as genai  # package: google-genai
     from google.genai import types
 
     _USING_NEW_GENAI = True
-except Exception:
-    warnings.filterwarnings(
-        "ignore",
-        category=FutureWarning,
-        module=r"google\\.generativeai",
-    )
-    import google.generativeai as genai
+except Exception as new_err:
+    try:
+        warnings.filterwarnings(
+            "ignore",
+            category=FutureWarning,
+            module=r"google\\.generativeai",
+        )
+        import google.generativeai as genai
+    except Exception as old_err:
+        _GENAI_IMPORT_ERROR = (new_err, old_err)
 
 # load environment variables from .env
 load_dotenv()
@@ -36,7 +47,7 @@ load_dotenv()
 # Note: API key is only required for LLM operations (single-file analysis / --process-llm).
 API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
-if not _USING_NEW_GENAI:
+if genai is not None and (not _USING_NEW_GENAI):
     # Legacy SDK uses module-level configure(). New SDK uses Client(api_key=...).
     if API_KEY:
         genai.configure(api_key=API_KEY)
@@ -273,7 +284,34 @@ def _extract_text_from_response(resp):
 
 def _genai_upload(client, path):
     if _USING_NEW_GENAI:
-        return client.files.upload(path=path)
+        # google-genai has multiple incompatible upload signatures across versions.
+        # Observed variants:
+        # - upload(*, file=...)  (keyword-only; passing positional raises: takes 1 positional argument but 2 were given)
+        # - upload(path=...)
+        # - upload(<path>)
+        upload_errors = []
+
+        for attempt in (
+            lambda: client.files.upload(file=path),
+            lambda: client.files.upload(path=path),
+            lambda: client.files.upload(path),
+        ):
+            try:
+                return attempt()
+            except TypeError as e:
+                upload_errors.append(str(e))
+
+        # Last resort: some versions accept a binary stream as `file=`.
+        try:
+            with open(path, "rb") as fh:
+                return client.files.upload(file=fh)
+        except TypeError as e:
+            upload_errors.append(str(e))
+
+        raise TypeError(
+            "Unable to upload file with google-genai. Tried multiple signatures; last errors: "
+            + " | ".join(upload_errors[-3:])
+        )
     return genai.upload_file(path=path)
 
 
@@ -381,6 +419,12 @@ def main():
         scan_directory(args.scan_dir, out_dir)
         return
     if args.process_llm:
+        if genai is None:
+            print(
+                "錯誤：找不到 Gemini SDK。請安裝：pip install google-genai (或舊版 pip install google-generativeai)\n"
+                f"Import errors: {_GENAI_IMPORT_ERROR}"
+            )
+            return
         if not API_KEY:
             print("錯誤：請先設定 GEMINI_API_KEY 環境變數 (需要用於 --process-llm)")
             return
@@ -399,6 +443,13 @@ def main():
 
     if not API_KEY:
         print("錯誤：請先設定 GEMINI_API_KEY 環境變數")
+        return
+
+    if genai is None:
+        print(
+            "錯誤：找不到 Gemini SDK。請安裝：pip install google-genai (或舊版 pip install google-generativeai)\n"
+            f"Import errors: {_GENAI_IMPORT_ERROR}"
+        )
         return
 
     if _USING_NEW_GENAI:
