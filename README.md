@@ -16,7 +16,10 @@ Notes
 
 - The script records filesystem metadata (file name, full path, size, created/modified times) and stores the model `response_text` in the JSON.
 - The script uses `ffprobe` to obtain accurate media duration. If you need detailed install instructions, see INSTALL.md.
-- Gemini SDK: prefer `google-genai` (the older `google.generativeai` package is deprecated).
+- Gemini SDK: this repo supports both the newer `google-genai` and the legacy `google-generativeai`.
+  - In practice, `google-genai` has shown API drift across versions (for example, upload method signatures and `Part.from_uri(...)` argument names). This can cause runtime errors even when the script code is unchanged.
+  - The legacy `google-generativeai` SDK is older/deprecated, but it may be more stable in some environments.
+  - Future direction: we may keep using the legacy SDK for reliability (or pin a known-good `google-genai` version) until the new SDK surface is stable for our workflow.
 - You can configure the JSON output directory with `--out-dir` or the `VIDEO_JSON_DIR` environment variable.
 - If you prefer not to modify PATH, you can pass a specific `ffprobe` binary path by setting the `FFPROBE_PATH` environment variable or requesting the `--ffprobe-path` option (if enabled).
 

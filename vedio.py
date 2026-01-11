@@ -336,22 +336,67 @@ def _file_state_name(file_obj):
     return getattr(state, "name", None) or str(state)
 
 
+def _genai_part_from_uri(uri: str, mime_type: str):
+    """Create a Part for a file URI across google-genai versions."""
+    part_cls = getattr(types, "Part", None)
+    if part_cls is None:
+        raise RuntimeError("google-genai types.Part is unavailable")
+
+    part_errors = []
+    for attempt in (
+        # Newer/typed variants
+        lambda: part_cls.from_uri(uri=uri, mime_type=mime_type),
+        lambda: part_cls.from_uri(file_uri=uri, mime_type=mime_type),
+        # Some versions don't accept keyword for first arg
+        lambda: part_cls.from_uri(uri, mime_type=mime_type),
+        lambda: part_cls.from_uri(uri, mime_type),
+    ):
+        try:
+            return attempt()
+        except TypeError as e:
+            part_errors.append(str(e))
+
+    raise TypeError(
+        "Unable to build Part.from_uri with google-genai; last errors: "
+        + " | ".join(part_errors[-3:])
+    )
+
+
 def _genai_generate_text(client, video_file, prompt_text):
     if _USING_NEW_GENAI:
         model_name = os.getenv("GEMINI_MODEL") or "gemini-2.0-flash"
         uri = getattr(video_file, "uri", None)
-        mime = getattr(video_file, "mime_type", None) or "video/mp4"
+        mime = (
+            getattr(video_file, "mime_type", None)
+            or getattr(video_file, "mimeType", None)
+            or "video/mp4"
+        )
         if not uri:
             raise RuntimeError("Uploaded file missing uri")
-        contents = [
-            types.Content(
-                role="user",
-                parts=[
-                    types.Part.from_uri(uri=uri, mime_type=mime),
-                    types.Part(text=prompt_text),
-                ],
-            )
-        ]
+
+        # google-genai has drifted across versions; try typed objects first,
+        # then fall back to plain dict payload.
+        try:
+            contents = [
+                types.Content(
+                    role="user",
+                    parts=[
+                        _genai_part_from_uri(uri=uri, mime_type=mime),
+                        types.Part(text=prompt_text),
+                    ],
+                )
+            ]
+        except Exception:
+            contents = [
+                {
+                    "role": "user",
+                    "parts": [
+                        {"file_data": {"file_uri": uri, "mime_type": mime}},
+                        {"text": prompt_text},
+                    ],
+                }
+            ]
+
         resp = client.models.generate_content(model=model_name, contents=contents)
         text = _extract_text_from_response(resp)
         return text or ""
