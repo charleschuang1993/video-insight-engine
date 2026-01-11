@@ -16,6 +16,7 @@ Notes
 
 - The script records filesystem metadata (file name, full path, size, created/modified times) and stores the model `response_text` in the JSON.
 - The script uses `ffprobe` to obtain accurate media duration. If you need detailed install instructions, see INSTALL.md.
+- Gemini SDK: prefer `google-genai` (the older `google.generativeai` package is deprecated).
 - You can configure the JSON output directory with `--out-dir` or the `VIDEO_JSON_DIR` environment variable.
 - If you prefer not to modify PATH, you can pass a specific `ffprobe` binary path by setting the `FFPROBE_PATH` environment variable or requesting the `--ffprobe-path` option (if enabled).
 
@@ -32,15 +33,13 @@ python vedio.py C:\path\to\video.mp4 --out-dir C:\path\to\jsons
 Scan a directory (create metadata JSONs and summary CSV; no LLM calls):
 
 ```powershell
-python vedio.py dummy_path --scan-dir C:\path\to\videos --out-dir C:\path\to\jsons
+python vedio.py --scan-dir C:\path\to\videos --out-dir C:\path\to\jsons
 ```
-
-Note: the script requires a positional `video_path` argument but `--scan-dir` triggers directory scanning; the `video_path` can be any placeholder when using `--scan-dir`.
 
 Process existing metadata JSONs and append LLM responses:
 
 ```powershell
-python vedio.py dummy_path --process-llm --out-dir C:\path\to\jsons
+python vedio.py --process-llm --out-dir C:\path\to\jsons
 ```
 
 Environment variables:
