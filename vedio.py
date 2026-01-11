@@ -8,7 +8,7 @@ import json
 import uuid
 import subprocess
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
 from prompts import DEFAULT_PROMPT
@@ -64,30 +64,95 @@ def main():
     print("=" * 30 + "\n")
 
     # Prepare metadata/schema for video management and save to JSON
-    def get_video_duration(path):
-        ffprobe = shutil.which("ffprobe")
+    def get_media_info(path):
+        """Return media info dict using ffprobe JSON output.
+
+        Fields: duration_seconds, width, height, resolution, codec, bitrate, frame_rate
+        """
+        ffprobe = os.getenv("FFPROBE_PATH") or shutil.which("ffprobe")
         if not ffprobe:
             print("Error: 'ffprobe' not found on PATH. Please install ffmpeg/ffprobe and ensure ffprobe is available in your PATH. For Windows, try: 'choco install ffmpeg' or 'winget install --id Gyan.FFmpeg'.")
             sys.exit(1)
         try:
-            # run ffprobe to get duration in seconds
             res = subprocess.run(
-                [ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path],
+                [ffprobe, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", path],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=True,
             )
-            return float(res.stdout.strip()) if res.stdout else None
+            info = json.loads(res.stdout)
+            fmt = info.get("format", {})
+            streams = info.get("streams", [])
+            # find first video stream
+            vstream = None
+            for s in streams:
+                if s.get("codec_type") == "video":
+                    vstream = s
+                    break
+
+            duration = None
+            try:
+                if fmt.get("duration"):
+                    duration = float(fmt.get("duration"))
+            except Exception:
+                duration = None
+
+            width = int(vstream.get("width")) if vstream and vstream.get("width") else None
+            height = int(vstream.get("height")) if vstream and vstream.get("height") else None
+            resolution = f"{width}x{height}" if width and height else None
+            codec = vstream.get("codec_name") if vstream else None
+
+            # bitrate: prefer stream, fallback to format
+            bit_rate = None
+            if vstream and vstream.get("bit_rate"):
+                try:
+                    bit_rate = int(vstream.get("bit_rate"))
+                except Exception:
+                    bit_rate = None
+            elif fmt.get("bit_rate"):
+                try:
+                    bit_rate = int(fmt.get("bit_rate"))
+                except Exception:
+                    bit_rate = None
+
+            # frame rate: r_frame_rate like '30000/1001'
+            frame_rate = None
+            if vstream and vstream.get("r_frame_rate") and vstream.get("r_frame_rate") != "0/0":
+                try:
+                    num, den = vstream.get("r_frame_rate").split('/')
+                    frame_rate = float(num) / float(den) if float(den) != 0 else None
+                except Exception:
+                    frame_rate = None
+
+            return {
+                "duration_seconds": duration,
+                "width": width,
+                "height": height,
+                "resolution": resolution,
+                "codec": codec,
+                "bitrate": bit_rate,
+                "frame_rate": frame_rate,
+            }
         except Exception:
-            print("Warning: failed to get duration via ffprobe; proceeding with duration=None")
-            return None
+            print("Warning: failed to get media info via ffprobe; proceeding with limited metadata")
+            return {
+                "duration_seconds": None,
+                "width": None,
+                "height": None,
+                "resolution": None,
+                "codec": None,
+                "bitrate": None,
+                "frame_rate": None,
+            }
 
     file_path = os.path.abspath(video_path)
     stat = os.stat(file_path)
     created_at = datetime.fromtimestamp(stat.st_ctime).isoformat()
     modified_at = datetime.fromtimestamp(stat.st_mtime).isoformat()
     size_bytes = stat.st_size
-    duration_seconds = get_video_duration(file_path)
+    media_info = get_media_info(file_path)
 
     record_uuid = str(uuid.uuid4())
     metadata = {
@@ -97,8 +162,14 @@ def main():
         "created_at": created_at,
         "modified_at": modified_at,
         "size_bytes": size_bytes,
-        "duration_seconds": duration_seconds,
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "duration_seconds": media_info.get("duration_seconds"),
+        "width": media_info.get("width"),
+        "height": media_info.get("height"),
+        "resolution": media_info.get("resolution"),
+        "codec": media_info.get("codec"),
+        "bitrate": media_info.get("bitrate"),
+        "frame_rate": media_info.get("frame_rate"),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "response_text": response.text,
     }
 
